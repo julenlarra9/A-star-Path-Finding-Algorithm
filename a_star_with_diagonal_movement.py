@@ -1,5 +1,6 @@
 import pygame
 import math
+import heapq
 from queue import PriorityQueue
 import sys
 
@@ -24,7 +25,8 @@ TURQUOISE = (64, 224, 208)
 pygame.init()
 
 WIDTH=800
-WIN=pygame.display.set_mode((WIDTH,WIDTH))
+HEIGHT=WIDTH+50
+WIN=pygame.display.set_mode((WIDTH,HEIGHT))
 pygame.display.set_caption("A* Path Finding Algorithm")
 
 #goal is to make a grid where each cube will have an identity [color based attribute, location etc]
@@ -129,13 +131,19 @@ class spot:
 #outside the class
 
 #the heuristic function
-def heuristic(p1,p2):
-      x1,y1=p1
-      x2,y2=p2
-      l1_norm = abs(x1-x2) + abs(y1-y2)
-      l2_norm=math.sqrt((x1-x2)**2 + (y1-y2)**2)
-      #returning the manhattan distance [we can change it to euclidean, it also allows diagonal movement]
-      return l1_norm
+def heuristic(p1, p2, method='manhattan'):
+    x1, y1 = p1
+    x2, y2 = p2
+    if method == 'manhattan':
+      #returning the manhattan distance
+        return abs(x1 - x2) + abs(y1 - y2)
+    elif method == 'euclidean':
+      #returning the euclidean distance
+        return math.sqrt((x1 - x2)**2 + (y1 - y2)**2)
+    elif method == 'chebyshev':
+      #returning the chebyshev distance
+        return max(abs(x1 - x2), abs(y1 - y2))     
+    return 0
 
 #to make the grid in the window
 def make_grid(rows,width):
@@ -195,90 +203,82 @@ def reconstruct_path(prev,current_node,draw):
      current_node.make_start() #so that after reconstruction the starting spot is not covered purple
      draw()
 
-def algorithm(draw,grid,start,end): #here draw is passed as the lamda function with all the rquired parameters
-     count=0 #in video told to be used as second priority [when f scores are equal]
-     open_queue=PriorityQueue()
-     #put the start in priority queue
-     #each element in the queue has structure F_score,count,node
-     open_queue.put((0,count,start))
-     open_set_hash={start}
-     #the dict containing previous node in the path
-     prev={}
-     #set the dictionary to hold g,h scores of each node
-     g_score={spot:float("inf") for row in grid for spot in row}
-     g_score[start]=0
-     
-     h_score={spot: heuristic(spot.get_pos(),end.get_pos()) for row in grid for spot in row}
-     f_score={spot: h_score[spot]+g_score[spot]  for spot in h_score.keys()}
+def draw_button(window, x, y, width, height, text, color, text_color):
+    #Draws a button on the screen.
+    pygame.draw.rect(window, color, (x, y, width, height))
+    font = pygame.font.SysFont(None, 30)
+    text_surface = font.render(text, True, text_color)
+    text_rect = text_surface.get_rect(center=(x + width // 2, y + height // 2))
+    window.blit(text_surface, text_rect)
 
-     #untill we check all the elements in pq
-     while(open_queue.empty() !=True):
-          #check if the user has pressed exit cross
-          for event in pygame.event.get():
-               if event.type==pygame.QUIT:
-                    pygame.quit()
-            
-          #popped the topmost node [with least f score]
-          current_node=open_queue.get()[2]
-          open_set_hash.remove(current_node)
-          
-          #to stop the algorithm
-          if(current_node==end):
-               current_node.make_end()
-               print("found the end!!")
-               reconstruct_path(prev,current_node,draw)
-               return True
-          
-          #get the neighbours
-          neigh_node=current_node.neighbors
-          #HERE ALL NEIGHBOURS ARE A T DISTANCE 1 [UP,LEFT,DOWN,RIGHT]
-          
-          #check if the f,g,h scores of a neighbour is lower than what is in the dictionary
-          for neighbour in neigh_node:
-               #check if diagonal neighbour or not
-               if(heuristic(neighbour.get_pos(),current_node.get_pos())>1):
-                    #diagonal
-                    #if less g_score update
-                    if(g_score[current_node]+1.414<g_score[neighbour]):
-                            g_score[neighbour]=g_score[current_node]+1.414
-                            
-                    #if the f score is low update and put in the queue[even after putting while popping the element with least f score will come]
-                    if(g_score[current_node]+1.414+h_score[neighbour]<f_score[neighbour]):
-                        f_score[neighbour]=g_score[current_node]+1.414+h_score[neighbour]
-                        prev[neighbour]=current_node
+def is_mouse_over_button(pos, x, y, width, height):
+    #Checks if the mouse is over a button."""
+    return x <= pos[0] <= x + width and y <= pos[1] <= y + height
 
-                        if(neighbour not in open_set_hash):
-                            count+=1
-                            open_queue.put((f_score[neighbour],count,neighbour))
-                            open_set_hash.add(neighbour)
-                            neighbour.make_open() #these are the neighbours we did consider to look at
-               else:
-                   #if less g_score update
-                    if(g_score[current_node]+1<g_score[neighbour]):
-                            g_score[neighbour]=g_score[current_node]+1
-                            
-                    #if the f score is low update and put in the queue[even after putting while popping the element with least f score will come]
-                    if(g_score[current_node]+1+h_score[neighbour]<f_score[neighbour]):
-                        f_score[neighbour]=g_score[current_node]+1+h_score[neighbour]
-                        prev[neighbour]=current_node
+def algorithm(draw, grid, start, end):
+    count = 0  # Used as a tie-breaker when f scores are equal
+    open_list = []  # This will hold our priority queue
+    heapq.heappush(open_list, (0, count, start))  # Push start node into the queue
+    open_set_hash = {start}  # This is a set to quickly check if a node is in the open list
+    prev = {}  # Dictionary to track the previous node in the path
+    g_score = {spot: float("inf") for row in grid for spot in row}  # Initialize g_scores to infinity
+    g_score[start] = 0  # Set the g_score of the start node to 0
+    h_score = {spot: heuristic(spot.get_pos(), end.get_pos(), 'manhattan') for row in grid for spot in row}
+    f_score = {spot: h_score[spot] + g_score[spot] for spot in h_score.keys()}  # f_score = g_score + h_score
 
+    # Main loop for A* algorithm
+    while open_list:
+        # Check if the user has pressed exit cross
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
 
-                        if(neighbour not in open_set_hash):
-                            count+=1
-                            open_queue.put((f_score[neighbour],count,neighbour))
-                            open_set_hash.add(neighbour)
-                            neighbour.make_open() #these are the neighbours we did consider to look at
-               
-                  
+        # Pop the node with the lowest f_score
+        current_f, current_count, current_node = heapq.heappop(open_list)
+        open_set_hash.remove(current_node)
 
-               
-    
-          draw()
-          if(current_node!=start):
-               current_node.make_closed()
+        # If we reached the end node, reconstruct the path and exit
+        if current_node == end:
+            current_node.make_end()
+            print("Found the end!")
+            reconstruct_path(prev, current_node, draw)
+            return True
 
-     print("no path found")         
-     return False
+        # Get the neighbors of the current node
+        neigh_node = current_node.neighbors
+
+        # Check each neighbor
+        for neighbor in neigh_node:
+            # Determine the cost of moving to this neighbor
+            if heuristic(neighbor.get_pos(), current_node.get_pos(), 'manhattan') > 1:
+                # Diagonal movement
+                tentative_g_score = g_score[current_node] + 1.414  # Diagonal distance is sqrt(2)
+            else:
+                # Orthogonal movement
+                tentative_g_score = g_score[current_node] + 1
+
+            # If this path to the neighbor is better, update its scores
+            if tentative_g_score < g_score[neighbor]:
+                g_score[neighbor] = tentative_g_score
+                f_score[neighbor] = g_score[neighbor] + h_score[neighbor]
+                prev[neighbor] = current_node
+
+                # If the neighbor is not in the open set, add it
+                if neighbor not in open_set_hash:
+                    count += 1
+                    heapq.heappush(open_list, (f_score[neighbor], count, neighbor))
+                    open_set_hash.add(neighbor)
+                    neighbor.make_open()
+
+        # Mark the current node as closed
+        if current_node != start:
+            current_node.make_closed()
+
+        # Update the display
+        draw()
+
+    print("No path found")
+    return False
 
 def main(window,width):
     ROWS=50
@@ -291,9 +291,18 @@ def main(window,width):
     run=True
 
     grid=make_grid(ROWS,width)
-    
+
+    # Button attributes
+    button_width = 100
+    button_height = 40
+    button_x = (width // 2) - (button_width // 2)
+    button_y = width + 10
+
     while run:
         draw(window,grid,width,ROWS)
+        # Draw the restart button
+        draw_button(window, button_x, button_y, button_width, button_height, "Restart", ORANGE, WHITE)
+        pygame.display.update()
         for event in pygame.event.get():
             if(event.type==pygame.QUIT):
                 run=False
@@ -305,6 +314,13 @@ def main(window,width):
             #the mouse key is pressed
             if pygame.mouse.get_pressed()[0]: #the left button
                 pos=pygame.mouse.get_pos()
+
+                # Check if restart button was clicked
+                if is_mouse_over_button(pos, button_x, button_y, button_width, button_height):
+                    start = None
+                    end = None
+                    grid = make_grid(ROWS, width)
+                    continue
 
                  #get the row and col number of the cube in the grid
                 row,col=get_click(pos,ROWS,width)
